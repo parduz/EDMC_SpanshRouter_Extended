@@ -8,28 +8,18 @@ import json
 import re
 import requests
 import io
-import ast
 from time import sleep
 from monitor import monitor
 from . import AutoCompleter
 from . import PlaceHolder
 from .updater import SpanshUpdater
+
 import tkinter as tk
 import tkinter.filedialog as filedialog
 import tkinter.messagebox as confirmDialog
-from tkinter import *
 
-import logging
-from config import appname
-
-# This could also be returned from plugin_start3()
-plugin_name = os.path.basename(os.path.dirname(__file__))
-
-# A Logger is used per 'found' plugin to make it easy to include the plugin's
-# folder name in the logging output format.
-# NB: plugin_name here *must* be the plugin's folder name as per the preceding
-#     code, else the logger won't be properly set up.
-logger = logging.getLogger(f'{appname}.{plugin_name}')
+import tkinter.ttk as ttk
+from config import config
 
 class SpanshRouter():
     def __init__(self, plugin_dir):
@@ -38,106 +28,154 @@ class SpanshRouter():
             self.plugin_version = version_fd.read()
 
         self.update_available = False
-        self.roadtoriches = False
-        self.fleetcarrier = False
         self.next_stop = "No route planned"
         self.route = []
         self.next_wp_label = "Next waypoint: "
         self.jumpcountlbl_txt = "Estimated jumps left: "
-        self.bodieslbl_txt = "Bodies to scan at: "
-        self.fleetstocklbl_txt = "Time to restock Tritium"
-        self.bodies = ""
         self.parent = None
         self.plugin_dir = plugin_dir
         self.save_route_path = os.path.join(plugin_dir, 'route.csv')
-        self.export_route_path = os.path.join(plugin_dir, 'Export for TCE.exp')
         self.offset_file_path = os.path.join(plugin_dir, 'offset')
         self.offset = 0
+        self.jumps_current = 0
         self.jumps_left = 0
         self.error_txt = tk.StringVar()
         self.plot_error = "Error while trying to plot a route, please try again."
         self.system_header = "System Name"
-        self.bodyname_header = "Body Name"
-        self.bodysubtype_header = "Body Subtype"
         self.jumps_header = "Jumps"
-        self.restocktritium_header = "Restock Tritium"
+
+        self.use_LabelFrames = False
 
     #   -- GUI part --
     def init_gui(self, parent):
         self.parent = parent
         self.frame = tk.Frame(parent, borderwidth=2)
-        self.frame.grid(sticky=tk.NSEW, columnspan=2)
+        self.frame.grid(sticky=tk.NSEW, columnspan=3)
 
-        # Route info
-        self.waypoint_prev_btn = tk.Button(self.frame, text="^", command=self.goto_prev_waypoint)
-        self.waypoint_btn = tk.Button(self.frame, text=self.next_wp_label + '\n' + self.next_stop, command=self.copy_waypoint)
-        self.waypoint_next_btn = tk.Button(self.frame, text="v", command=self.goto_next_waypoint)
-        self.jumpcounttxt_lbl = tk.Label(self.frame, text=self.jumpcountlbl_txt + str(self.jumps_left))
-        self.bodies_lbl = tk.Label(self.frame, justify=LEFT, text=self.bodieslbl_txt + self.bodies)
-        self.fleetrestock_lbl = tk.Label(self.frame, justify=LEFT, text=self.fleetstocklbl_txt)
-        self.error_lbl = tk.Label(self.frame, textvariable=self.error_txt)
+        if self.use_LabelFrames:
+            # self.waypoint_frm  = tk.LabelFrame(self.frame, text="Waypoints:", borderwidth=2)
+            # self.route_frm     = tk.LabelFrame(self.frame, text="Route:", borderwidth=2)
+            # self.plot_frm      = tk.LabelFrame(self.frame, text="Plot:", borderwidth=2)
+            self.waypoint_frm  = ttk.LabelFrame(self.frame, text="Waypoints:", borderwidth=2, relief=tk.SOLID )
+            self.route_frm     = tk.LabelFrame (self.frame, text="Route:",     borderwidth=2, relief=tk.SOLID )
+            self.plot_frm      = ttk.LabelFrame(self.frame, text="Plot:",      borderwidth=2, relief=tk.SOLID )
+            self.waypoint_frm.theme = config.get_int('theme')
+            self.waypoint_frm.fg    = config.get_str('dark_text')        if self.waypoint_frm.theme else 'black'
+            self.waypoint_frm.hl    = config.get_str('dark_highlight')   if self.waypoint_frm.theme else 'blue'
+            self.waypoint_frm.bg    = 'grey4'                            if self.waypoint_frm.theme else None
+            self.route_frm.theme    = config.get_int('theme')
+            self.route_frm['fg']    = config.get_str('dark_text')        if self.route_frm.theme else 'black'
+            #self.route_frm['hl']    = config.get_str('dark_highlight')   if self.route_frm.theme else 'blue'
+            self.route_frm['bg']    = 'grey4'                            if self.route_frm.theme else None
+            self.plot_frm.theme     = config.get_int('theme')
+            self.plot_frm['fg']        = config.get_str('dark_text')        if self.plot_frm.theme  else 'black'
+            self.plot_frm['hl']        = config.get_str('dark_highlight')   if self.plot_frm.theme  else 'blue'
+            self.plot_frm['bg']        = 'grey4'                            if self.plot_frm.theme  else None
+
+            waypt_UI = self.waypoint_frm
+            route_UI = self.route_frm
+            plot_UI  = self.plot_frm
+        else:
+            waypt_UI = self.frame
+            route_UI = self.frame
+            plot_UI  = self.frame
+
+        # Plugin title
+        self.title = tk.Label(self.frame, text="Spansh Router")
+
+        # Waypont buttons
+        self.waypoint_lbl      = tk.Label (waypt_UI, text="  Waypoints:")
+        self.waypoint_btn      = tk.Button(waypt_UI, text=self.next_wp_label + self.next_stop, foreground="yellow", command=self.copy_waypoint)
+        self.waypoint_prev_btn = tk.Button(waypt_UI, text="Prev", command=self.goto_prev_waypoint)
+        self.waypoint_next_btn = tk.Button(waypt_UI, text="Next", command=self.goto_next_waypoint)
+        self.jumpNext_lbl      = tk.Label (waypt_UI, text=str(self.jumps_current), foreground="lime")
+
+        # Route buttons
+        self.route_lbl         = tk.Label (route_UI, text="  Route:")
+        self.route_new_btn     = tk.Button(route_UI, text="Plot"   , command=self.show_plot_gui)
+        self.route_import_btn  = tk.Button(route_UI, text="Import" , command=self.plot_file)
+        self.route_clear_btn   = tk.Button(route_UI, text="Clear"  , command=self.clear_route)
+        self.jumpcounttxt_lbl  = tk.Label (route_UI, text=str(self.jumps_left), foreground="lime")
+        self.jumpcount_lbl     = tk.Label (route_UI, text=self.jumpcountlbl_txt)
 
         # Plotting GUI
-        self.source_ac = AutoCompleter(self.frame, "Source System", width=30)
-        self.dest_ac = AutoCompleter(self.frame, "Destination System", width=30)
-        self.range_entry = PlaceHolder(self.frame, "Range (LY)", width=10)
-        self.efficiency_slider = tk.Scale(self.frame, from_=1, to=100, orient=tk.HORIZONTAL, label="Efficiency (%)")
+        self.plot_lbl          = tk.Label      (plot_UI, text="  Route Plot:")
+        self.plot_source_ac    = AutoCompleter (plot_UI, "Source System",       width=30)
+        self.plot_dest_ac      = AutoCompleter (plot_UI, "Destination System",  width=30)
+        self.plot_range_entry  = PlaceHolder   (plot_UI, "Range (LY)",          width=10)
+        self.efficiency_slider = tk.Scale      (plot_UI, from_=1, to=100, orient=tk.HORIZONTAL, label="Efficiency (%)", relief=tk.SOLID, highlightthickness=0, bd=0, troughcolor="red")
+        self.plot_calc_btn     = tk.Button     (plot_UI, text="Calculate",  command=self.plot_route)
+        self.plot_canc_btn     = tk.Button     (plot_UI, text="Cancel",     command=lambda: self.show_plot_gui(False))
         self.efficiency_slider.set(60)
-        self.plot_gui_btn = tk.Button(self.frame, text="Plot route", command=self.show_plot_gui)
-        self.plot_route_btn = tk.Button(self.frame, text="Calculate", command=self.plot_route)
-        self.cancel_plot = tk.Button(self.frame, text="Cancel", command=lambda: self.show_plot_gui(False))
 
-        self.csv_route_btn = tk.Button(self.frame, text="Import file", command=self.plot_file)
-        self.export_route_btn = tk.Button(self.frame, text="Export for TCE", command=self.export_route)
-        self.clear_route_btn = tk.Button(self.frame, text="Clear route", command=self.clear_route)
+        # Errors
+        self.error_lbl = tk.Label(self.frame, textvariable=self.error_txt)
+
+        # "Sizers"
+        self.sCol1_lbl = tk.Label(self.frame, width=15)
+        self.sCol2_lbl = tk.Label(self.frame, width=15)
+        self.sCol3_lbl = tk.Label(self.frame, width=15)
 
         row = 0
-        self.waypoint_prev_btn.grid(row=row, columnspan=2)
+        # The router Title
+        self.title.grid(row=row, columnspan=3, pady=10)
+
+        if self.use_LabelFrames:
+            waypt_UI.grid (sticky=tk.NSEW, columnspan=3)
+            route_UI.grid (sticky=tk.NSEW, columnspan=3)
+            plot_UI.grid  (sticky=tk.NSEW, columnspan=3)
+        else:
+            row += 1
+
+        # Waypoints section
+        self.waypoint_lbl.grid(row=row, columnspan=3, pady=(10,0), sticky=tk.EW)
         row += 1
-        self.waypoint_btn.grid(row=row, columnspan=2)
+        self.waypoint_prev_btn.grid(row=row, column=0, padx=4, sticky=tk.EW)
+        self.jumpNext_lbl.grid     (row=row, column=1,         sticky=tk.EW)
+        self.waypoint_next_btn.grid(row=row, column=2, padx=4, sticky=tk.EW)
         row += 1
-        self.waypoint_next_btn.grid(row=row, columnspan=2)
+        self.waypoint_btn.grid(row=row, column=0, columnspan=3, padx=4, sticky=tk.EW)
         row += 1
-        self.bodies_lbl.grid(row=row, columnspan=2, sticky=tk.W)
+
+        # Route section
+        if self.use_LabelFrames: row=0
+        self.route_lbl.grid(row=row, columnspan=3, pady=(10,0), sticky=tk.EW)
         row += 1
-        self.fleetrestock_lbl.grid(row=row, columnspan=2, sticky=tk.W)
+        self.route_import_btn.grid (row=row, column=0, padx=4, sticky=tk.EW)
+        self.route_clear_btn.grid  (row=row, column=1, padx=4, sticky=tk.EW)
+        self.route_new_btn.grid    (row=row, column=2, padx=4, sticky=tk.EW)
         row += 1
-        self.source_ac.grid(row=row,columnspan=2, pady=(10,0)) # The AutoCompleter takes two rows to show the list when needed, so we skip one
-        row += 2
-        self.dest_ac.grid(row=row,columnspan=2, pady=(10,0))
-        row += 2
-        self.range_entry.grid(row=row, pady=10, sticky=tk.W)
+        #- self.jumpcounttxt_lbl.grid(row=row, column=0, columnspan=3, pady=5, sticky=tk.W)
+        self.jumpcount_lbl.grid    (row=row, column=0, columnspan=2, pady=5, sticky=tk.E)
+        self.jumpcounttxt_lbl.grid (row=row, column=2,               pady=5, sticky=tk.W)
+
+        # Plot section
+        if self.use_LabelFrames: row=0
+        self.plot_lbl.grid(row=row, columnspan=3, pady=(10,0), sticky=tk.EW)
         row += 1
-        self.efficiency_slider.grid(row=row, pady=10, columnspan=2, sticky=tk.EW)
+        self.plot_source_ac.grid    (row=row, column=0, columnspan=2)
+        self.plot_calc_btn.grid     (row=row, column=2, rowspan=2,      padx=4,         sticky=tk.NSEW)
+        row += 2  # The AutoCompleter takes two rows to show the list when needed, so we skip one
+        self.plot_dest_ac.grid      (row=row, column=0, columnspan=2)
+        row += 2  # The AutoCompleter takes two rows to show the list when needed, so we skip one
+        self.plot_range_entry.grid  (row=row, column=0,                 pady=10,        sticky=tk.W)
         row += 1
-        self.csv_route_btn.grid(row=row, pady=10, padx=0)
-        self.plot_route_btn.grid(row=row, pady=10, padx=0)
-        self.plot_gui_btn.grid(row=row, column=1, pady=10, padx=5, sticky=tk.W)
-        self.cancel_plot.grid(row=row, column=1, pady=10, padx=5, sticky=tk.E)
+        self.efficiency_slider.grid (row=row, column=0, columnspan=2,   pady=10,        sticky=tk.EW)
+        self.plot_canc_btn.grid     (row=row, column=2, rowspan=2,      padx=4,         sticky=tk.NSEW)
         row += 1
-        self.export_route_btn.grid(row=row, pady=10, padx=0)
-        self.clear_route_btn.grid(row=row, column=1, pady=10, padx=5, sticky=tk.W)
-        row += 1
-        self.jumpcounttxt_lbl.grid(row=row, pady=5, sticky=tk.W)
-        row += 1
-        self.error_lbl.grid(row=row, columnspan=2)
+
+        # Error label
+        self.error_lbl.grid(row=row, columnspan=3)
         self.error_lbl.grid_remove()
         row += 1
+        self.sCol1_lbl.grid(row=row, column=0, sticky=tk.EW)
+        self.sCol2_lbl.grid(row=row, column=1, sticky=tk.EW)
+        self.sCol3_lbl.grid(row=row, column=2, sticky=tk.EW)
 
         # Check if we're having a valid range on the fly
-        self.range_entry.var.trace('w', self.check_range)
+        self.plot_range_entry.var.trace('w', self.check_range)
 
         self.show_plot_gui(False)
-
-        if not self.route.__len__() > 0:
-            self.waypoint_prev_btn.grid_remove()
-            self.waypoint_btn.grid_remove()
-            self.waypoint_next_btn.grid_remove()
-            self.jumpcounttxt_lbl.grid_remove()
-            self.bodies_lbl.grid_remove()
-            self.fleetrestock_lbl.grid_remove()
-            self.export_route_btn.grid_remove()
-            self.clear_route_btn.grid_remove()
 
         self.update_gui()
 
@@ -145,100 +183,100 @@ class SpanshRouter():
 
     def show_plot_gui(self, show=True):
         if show:
-            self.waypoint_prev_btn.grid_remove()
-            self.waypoint_btn.grid_remove()
-            self.waypoint_next_btn.grid_remove()
-            self.jumpcounttxt_lbl.grid_remove()
-            self.bodies_lbl.grid_remove()
-            self.fleetrestock_lbl.grid_remove()
-            self.export_route_btn.grid_remove()
-            self.clear_route_btn.grid_remove()
 
-            self.plot_gui_btn.grid_remove()
-            self.csv_route_btn.grid_remove()
-            self.source_ac.grid()
             # Prefill the "Source" entry with the current system
-            self.source_ac.set_text(monitor.system if monitor.system is not None else "Source System", monitor.system is None)
-            self.dest_ac.grid()
-            self.range_entry.grid()
+            self.plot_source_ac.set_text(monitor.system if monitor.system is not None else "Source System", monitor.system is None)
+
+            self.plot_lbl.grid()
+            self.plot_source_ac.grid()
+            self.plot_dest_ac.grid()
+            self.plot_range_entry.grid()
             self.efficiency_slider.grid()
-            self.plot_route_btn.grid()
-            self.cancel_plot.grid()
+            self.plot_calc_btn.grid()
+            self.plot_canc_btn.grid()
 
             self.show_route_gui(False)
 
         else:
-            if len(self.source_ac.var.get()) == 0:
-                self.source_ac.put_placeholder()
-            if len(self.dest_ac.var.get()) == 0:
-                self.dest_ac.put_placeholder()
-            self.source_ac.hide_list()
-            self.source_ac.grid_remove()
-            self.dest_ac.hide_list()
-            self.dest_ac.grid_remove()
-            self.range_entry.grid_remove()
+            if len(self.plot_source_ac.var.get()) == 0:
+                self.plot_source_ac.put_placeholder()
+            if len(self.plot_dest_ac.var.get()) == 0:
+                self.plot_dest_ac.put_placeholder()
+            self.plot_source_ac.hide_list()
+            self.plot_dest_ac.hide_list()
+
+            self.plot_lbl.grid_remove()
+            self.plot_source_ac.grid_remove()
+            self.plot_dest_ac.grid_remove()
+            self.plot_range_entry.grid_remove()
             self.efficiency_slider.grid_remove()
-            self.plot_gui_btn.grid_remove()
-            self.plot_route_btn.grid_remove()
-            self.cancel_plot.grid_remove()
-            self.plot_gui_btn.grid()
-            self.csv_route_btn.grid()
+            self.plot_calc_btn.grid_remove()
+            self.plot_canc_btn.grid_remove()
+
+            #- self.route_new_btn.grid_remove()
+            #- self.route_new_btn.grid()
+            #- self.route_import_btn.grid()
+
             self.show_route_gui(True)
 
     def set_source_ac(self, text):
-        self.source_ac.delete(0, tk.END)
-        self.source_ac.insert(0, text)
-        self.source_ac.set_default_style()
+        self.plot_source_ac.delete(0, tk.END)
+        self.plot_source_ac.insert(0, text)
+        self.plot_source_ac.set_default_style()
 
     def show_route_gui(self, show):
         self.hide_error()
-        if not show or not self.route.__len__() > 0:
+        #- if not show or not self.route.__len__() > 0:
+        if not show:
+            self.waypoint_lbl.grid_remove()
             self.waypoint_prev_btn.grid_remove()
             self.waypoint_btn.grid_remove()
             self.waypoint_next_btn.grid_remove()
+            self.route_lbl.grid_remove()
+            self.route_import_btn.grid_remove()
+            self.route_clear_btn.grid_remove()
+            self.route_new_btn.grid_remove()
+            self.jumpcount_lbl.grid_remove()
             self.jumpcounttxt_lbl.grid_remove()
-            self.bodies_lbl.grid_remove()
-            self.fleetrestock_lbl.grid_remove()
-            self.export_route_btn.grid_remove()
-            self.clear_route_btn.grid_remove()
+
         else:
-            self.waypoint_btn["text"] = self.next_wp_label + '\n' + self.next_stop
-            if self.jumps_left > 0:
-                self.jumpcounttxt_lbl["text"] = self.jumpcountlbl_txt + str(self.jumps_left)
-                self.jumpcounttxt_lbl.grid()
-            else:
-                self.jumpcounttxt_lbl.grid_remove()
-
-            if self.roadtoriches:
-                self.bodies_lbl["text"] = self.bodieslbl_txt + self.bodies
-                self.bodies_lbl.grid()
-            else:
-                self.bodies_lbl.grid_remove()
-
-            self.fleetrestock_lbl.grid_remove()
-            if self.fleetcarrier:
-                if self.offset > 0:
-                    restock = self.route[self.offset - 1][2]
-                    if restock.lower() == "yes":
-                        self.fleetrestock_lbl["text"] = f"At: {self.route[self.offset - 1][0]}\n   {self.fleetstocklbl_txt}" 
-                        self.fleetrestock_lbl.grid()
-
-            self.waypoint_prev_btn.grid()
-            self.waypoint_btn.grid()
-            self.waypoint_next_btn.grid()
-
-            if self.offset == 0:
+            if not self.route.__len__() > 0:
+                self.route_clear_btn.config(state=tk.DISABLED)
+                self.waypoint_btn["text"] = "- - -"
+                self.waypoint_btn.config(state=tk.DISABLED)
+                self.waypoint_next_btn.config(state=tk.DISABLED)
                 self.waypoint_prev_btn.config(state=tk.DISABLED)
             else:
-                self.waypoint_prev_btn.config(state=tk.NORMAL)
+                self.route_clear_btn.config(state=tk.NORMAL)
+                self.waypoint_btn["text"] = self.next_wp_label + self.next_stop
+                self.waypoint_btn.config(state=tk.NORMAL)
+
+                if self.offset == 0:
+                    self.waypoint_prev_btn.config(state=tk.DISABLED)
+                else:
+                    self.waypoint_prev_btn.config(state=tk.NORMAL)
 
                 if self.offset == self.route.__len__()-1:
                     self.waypoint_next_btn.config(state=tk.DISABLED)
                 else:
                     self.waypoint_next_btn.config(state=tk.NORMAL)
 
-            self.export_route_btn.grid()
-            self.clear_route_btn.grid()
+            if self.jumps_left > 0: self.jumpcounttxt_lbl["text"] = str(self.jumps_left)
+            else:                   self.jumpcounttxt_lbl["text"] = "- - -"
+
+            if self.jumps_current < 0: self.jumpNext_lbl["text"] = "- - -"
+            else:                      self.jumpNext_lbl["text"] = str(self.jumps_current)
+
+            self.waypoint_lbl.grid()
+            self.waypoint_prev_btn.grid()
+            self.waypoint_btn.grid()
+            self.waypoint_next_btn.grid()
+            self.route_lbl.grid()
+            self.route_import_btn.grid()
+            self.route_clear_btn.grid()
+            self.route_new_btn.grid()
+            self.jumpcount_lbl.grid()
+            self.jumpcounttxt_lbl.grid()
 
     def update_gui(self):
         self.show_route_gui(True)
@@ -252,39 +290,33 @@ class SpanshRouter():
 
     def enable_plot_gui(self, enable):
         if enable:
-            self.source_ac.config(state=tk.NORMAL)
-            self.source_ac.update_idletasks()
-            self.dest_ac.config(state=tk.NORMAL)
-            self.dest_ac.update_idletasks()
+            self.plot_source_ac.config(state=tk.NORMAL)
+            self.plot_dest_ac.config(state=tk.NORMAL)
             self.efficiency_slider.config(state=tk.NORMAL)
-            self.efficiency_slider.update_idletasks()
-            self.range_entry.config(state=tk.NORMAL)
-            self.range_entry.update_idletasks()
-            self.plot_route_btn.config(state=tk.NORMAL, text="Calculate")
-            self.plot_route_btn.update_idletasks()
-            self.cancel_plot.config(state=tk.NORMAL)
-            self.cancel_plot.update_idletasks()
+            self.plot_range_entry.config(state=tk.NORMAL)
+            self.plot_calc_btn.config(state=tk.NORMAL, text="Calculate")
+            self.plot_canc_btn.config(state=tk.NORMAL)
         else:
-            self.source_ac.config(state=tk.DISABLED)
-            self.source_ac.update_idletasks()
-            self.dest_ac.config(state=tk.DISABLED)
-            self.dest_ac.update_idletasks()
+            self.plot_source_ac.config(state=tk.DISABLED)
+            self.plot_dest_ac.config(state=tk.DISABLED)
             self.efficiency_slider.config(state=tk.DISABLED)
-            self.efficiency_slider.update_idletasks()
-            self.range_entry.config(state=tk.DISABLED)
-            self.range_entry.update_idletasks()
-            self.plot_route_btn.config(state=tk.DISABLED, text="Computing...")
-            self.plot_route_btn.update_idletasks()
-            self.cancel_plot.config(state=tk.DISABLED)
-            self.cancel_plot.update_idletasks()
+            self.plot_range_entry.config(state=tk.DISABLED)
+            self.plot_calc_btn.config(state=tk.DISABLED, text="Computing...")
+            self.plot_canc_btn.config(state=tk.DISABLED)
 
+        self.plot_source_ac.update_idletasks()
+        self.plot_dest_ac.update_idletasks()
+        self.efficiency_slider.update_idletasks()
+        self.plot_range_entry.update_idletasks()
+        self.plot_calc_btn.update_idletasks()
+        self.plot_canc_btn.update_idletasks()
     #   -- END GUI part --
 
 
     def open_last_route(self):
         try:
             has_headers = False
-            with open(self.save_route_path, 'r', newline='') as csvfile:
+            with open(self.save_route_path, 'r') as csvfile:
                 # Check if the file has a header for compatibility with previous versions
                 dict_route_reader = csv.DictReader(csvfile)
                 if dict_route_reader.fieldnames[0] == self.system_header:
@@ -293,7 +325,7 @@ class SpanshRouter():
             if has_headers:
                 self.plot_csv(self.save_route_path, clear_previous_route=False)
             else:
-                with open(self.save_route_path, 'r', newline='') as csvfile:
+                with open(self.save_route_path, 'r') as csvfile:
                     route_reader = csv.reader(csvfile)
 
                     for row in route_reader:
@@ -313,7 +345,6 @@ class SpanshRouter():
                     self.jumps_left += int(row[1])
 
             self.next_stop = self.route[self.offset][0]
-            self.update_bodies_text()
             self.copy_waypoint()
             self.update_gui()
 
@@ -343,24 +374,27 @@ class SpanshRouter():
 
     def update_route(self, direction=1):
         if direction > 0:
+            self.offset += 1
             if self.route[self.offset][1] not in [None, "", []]:
                 self.jumps_left -= int(self.route[self.offset][1])
-            self.offset += 1
         else:
-            self.offset -= 1
             if self.route[self.offset][1] not in [None, "", []]:
                 self.jumps_left += int(self.route[self.offset][1])
+            self.offset -= 1
+
+        if self.route[self.offset][1] not in [None, "", []]:
+            self.jumps_current = int(self.route[self.offset][1])
+        else:
+            self.jumps_current = -1
 
         if self.offset >= self.route.__len__():
             self.next_stop = "End of the road!"
-            self.update_gui()
         else:
             self.next_stop = self.route[self.offset][0]
-            self.update_bodies_text()
-
-            self.update_gui()
             self.copy_waypoint()
+
         self.save_offset()
+        self.update_gui()
 
     def goto_changelog_page(self):
         changelog_url = 'https://github.com/CMDR-Kiel42/EDMC_SpanshRouter/blob/master/CHANGELOG.md#'
@@ -373,7 +407,8 @@ class SpanshRouter():
             ('CSV files', '*.csv'),
             ('Text files', '*.txt'),
         ]
-        filename = filedialog.askopenfilename(filetypes = ftypes, initialdir=os.path.expanduser('~'))
+        #filename = filedialog.askopenfilename(filetypes = ftypes, initialdir=os.path.expanduser('~'))
+        filename = filedialog.askopenfilename(filetypes = ftypes)
 
         if filename.__len__() > 0:
             try:
@@ -389,7 +424,6 @@ class SpanshRouter():
                 if ftype_supported:
                     self.offset = 0
                     self.next_stop = self.route[0][0]
-                    self.update_bodies_text()
                     self.copy_waypoint()
                     self.update_gui()
                     self.save_all_route()
@@ -403,130 +437,36 @@ class SpanshRouter():
                 self.show_error("An error occured while reading the file.")
 
     def plot_csv(self, filename, clear_previous_route=True):
-       with io.open(filename, 'r', encoding='utf-8-sig', newline='') as csvfile:
-            self.roadtoriches = False
-            self.fleetcarrier = False
-        
+        with io.open(filename, 'r', encoding='utf-8-sig') as csvfile:
+            route_reader = csv.DictReader(csvfile)
+
             if clear_previous_route:
                 self.clear_route(False)
-            
-            route_reader = csv.DictReader(csvfile)
-            
-            # Get column header names as string
-            headerline = ','.join(route_reader.fieldnames)
-
-            # Define the differnt internal formats based on the CSV header row
-            internalbasicheader1 = "System Name"
-            internalbasicheader2 = "System Name,Jumps"
-            internalrichesheader = "System Name,Jumps,Body Name,Body Subtype"
-            internalfleetcarrierheader = "System Name,Jumps,Restock Tritium"
-            # Define the differnt import file formats based on the CSV header row
-            neutronimportheader = "System Name,Distance To Arrival,Distance Remaining,Neutron Star,Jumps"
-            road2richesimportheader = "System Name,Body Name,Body Subtype,Is Terraformable,Distance To Arrival,Estimated Scan Value,Estimated Mapping Value,Jumps"
-            fleetcarrierimportheader = "System Name,Distance,Distance Remaining,Fuel Used,Icy Ring,Pristine,Restock Tritium"
-
-            if (headerline == internalbasicheader1) or (headerline == internalbasicheader2) or (headerline == neutronimportheader):
-                for row in route_reader:
-                    if row not in (None, "", []):
-                        self.route.append([
-                            row[self.system_header],
-                            row.get(self.jumps_header, "") # Jumps column is optional
-                        ])
-                        if row.get(self.jumps_header): # Jumps column is optional
-                            self.jumps_left += int(row[self.jumps_header])
-
-            elif headerline == internalrichesheader:
-                self.roadtoriches = True
-
-                for row in route_reader:
-                    if row not in (None, "", []):
-                        # Convert string representations of lists to actual Lists
-                        bodynames = ast.literal_eval(row[self.bodyname_header])
-                        bodysubtypes = ast.literal_eval(row[self.bodysubtype_header])
-
-                        self.route.append([
-                            row[self.system_header],
-                            row[self.jumps_header],
-                            bodynames,
-                            bodysubtypes
-                        ])
-                        self.jumps_left += int(row[self.jumps_header])
-
-            elif headerline == internalfleetcarrierheader:
-                self.fleetcarrier = True
-
-                for row in route_reader:
-                    if row not in (None, "", []):
-                        self.route.append([
-                            row[self.system_header],
-                            row[self.jumps_header],
-                            row[self.restocktritium_header]
-                        ])
-                        self.jumps_left += int(row[self.jumps_header])
-
-            elif headerline == road2richesimportheader:
-                self.roadtoriches = True
-
-                bodynames = []
-                bodysubtypes = []
-
-                for row in route_reader:
-                    bodyname = row[self.bodyname_header]
-                    bodysubtype = row[self.bodysubtype_header]
-
-                    # Update the current system with additional bodies from new CSV row
-                    if self.route.__len__() > 0 and row[self.system_header] == self.route[-1][0]:
-                        self.route[-1][2].append(bodyname)
-                        self.route[-1][3].append(bodysubtype)
-                        continue
-
-                    if row not in (None, "", []):
-                        bodynames.append(bodyname)
-                        bodysubtypes.append(bodysubtype)
-
-                        self.route.append([
-                            row[self.system_header],
-                            row[self.jumps_header],
-                            bodynames.copy(),
-                            bodysubtypes.copy()
-                        ])
-                        # Clear bodies for next system
-                        bodynames.clear()
-                        bodysubtypes.clear()
-
-                        self.jumps_left += int(row[self.jumps_header])
-
-            elif headerline == fleetcarrierimportheader:
-                self.fleetcarrier = True
-
-                for row in route_reader:
-                    if row not in (None, "", []):
-                        self.route.append([
-                            row[self.system_header],
-                            1, # Jumps is faked as every row is 1 jump
-                            row[self.restocktritium_header]
-                        ])
-                        self.jumps_left += 1 # Jumps is faked as every row is 1 jump
-
-            else:
-                self.show_error("Could not detect file format")
+            for row in route_reader:
+                if row not in (None, "", []):
+                    self.route.append([
+                        row[self.system_header],
+                        row.get(self.jumps_header, "").strip() # Jumps column is optional
+                    ])
+                    if row.get(self.jumps_header) != None:
+                        self.jumps_left += int( row[self.jumps_header].strip() )
 
     def plot_route(self):
         self.hide_error()
         try:
-            source = self.source_ac.get().strip()
-            dest = self.dest_ac.get().strip()
+            source = self.plot_source_ac.get().strip()
+            dest = self.plot_dest_ac.get().strip()
             efficiency = self.efficiency_slider.get()
 
             # Hide autocomplete lists in case they're still shown
-            self.source_ac.hide_list()
-            self.dest_ac.hide_list()
+            self.plot_source_ac.hide_list()
+            self.plot_dest_ac.hide_list()
 
-            if (    source  and source != self.source_ac.placeholder and
-                    dest    and dest != self.dest_ac.placeholder    ):
+            if (    source  and source != self.plot_source_ac.placeholder and
+                    dest    and dest != self.plot_dest_ac.placeholder    ):
 
                 try:
-                    range_ly = float(self.range_entry.get())
+                    range_ly = float(self.plot_range_entry.get())
                 except ValueError:
                     self.show_error("Invalid range")
                     return
@@ -577,9 +517,9 @@ class SpanshRouter():
                             if route_response.status_code == 400 and "error" in failure:
                                 self.show_error(failure["error"])
                                 if "starting system" in failure["error"]:
-                                    self.source_ac["fg"] = "red"
+                                    self.plot_source_ac["fg"] = "red"
                                 if "finishing system" in failure["error"]:
-                                    self.dest_ac["fg"] = "red"
+                                    self.plot_dest_ac["fg"] = "red"
                             else:
                                 self.show_error(self.plot_error)
                     else:
@@ -594,9 +534,9 @@ class SpanshRouter():
                     if results.status_code == 400 and "error" in failure:
                         self.show_error(failure["error"])
                         if "starting system" in failure["error"]:
-                            self.source_ac["fg"] = "red"
+                            self.plot_source_ac["fg"] = "red"
                         if "finishing system" in failure["error"]:
-                            self.dest_ac["fg"] = "red"
+                            self.plot_dest_ac["fg"] = "red"
                     else:
                         self.show_error(self.plot_error)
 
@@ -634,31 +574,6 @@ class SpanshRouter():
             self.enable_plot_gui(True)
             self.show_error("An error occured while reading the file.")
 
-    def export_route(self):
-        if self.route.__len__() == 0:
-            #logger.info("No route to export")
-            print("No route to export")
-            return
-
-        route_start = self.route[0][0]
-        route_end = self.route[-1][0]
-        route_name = f"{route_start} to {route_end}"
-        #logger.info(f"Route name: {route_name}")
-
-        ftypes = [('TCE Flight Plan files', '*.exp')]
-        filename = filedialog.asksaveasfilename(filetypes = ftypes, initialdir=os.path.expanduser('~'), initialfile=f"{route_name}.exp")
-
-        if filename.__len__() > 0:
-            try:
-                with open(filename, 'w') as csvfile:
-                    for row in self.route:
-                        csvfile.write(f"{route_name},{row[0]}\n")
-            except:
-                exc_type, exc_value, exc_traceback = sys.exc_info()
-                lines = traceback.format_exception(exc_type, exc_value, exc_traceback)
-                #logger.error(''.join('!! ' + line for line in lines))
-                self.show_error("An error occured while writing the file.")
-
     def clear_route(self, show_dialog=True):
         clear = confirmDialog.askyesno("SpanshRouter","Are you sure you want to clear the current route?") if show_dialog else True
 
@@ -667,8 +582,6 @@ class SpanshRouter():
             self.route = []
             self.next_waypoint = ""
             self.jumps_left = 0
-            self.roadtoriches = False
-            self.fleetcarrier = False
             try:
                 os.remove(self.save_route_path)
             except:
@@ -686,29 +599,11 @@ class SpanshRouter():
 
     def save_route(self):
         if self.route.__len__() != 0:
-            with open(self.save_route_path, 'w', newline='') as csvfile:
-                if self.roadtoriches:
-                    # Write output: System, Jumps, Bodies[], BodySubTypes[]
-                    fieldnames = [self.system_header, self.jumps_header, self.bodyname_header, self.bodysubtype_header]
-                    writer = csv.writer(csvfile)
-                    writer.writerow(fieldnames)
-                    for row in self.route:
-                        writer.writerow(row)
-
-                if self.fleetcarrier:
-                    # Write output: System, Jumps, 
-                    fieldnames = [self.system_header, self.jumps_header, self.restocktritium_header]
-                    writer = csv.writer(csvfile)
-                    writer.writerow(fieldnames)
-                    for row in self.route:
-                        writer.writerow(row)
-
-                else:
-                    # Write output: System, Jumps
-                    fieldnames = [self.system_header, self.jumps_header]
-                    writer = csv.writer(csvfile)
-                    writer.writerow(fieldnames)
-                    writer.writerows(self.route)
+            with open(self.save_route_path, 'w') as csvfile:
+                fieldnames = [self.system_header, self.jumps_header]
+                writer = csv.writer(csvfile)
+                writer.writerow(fieldnames)
+                writer.writerows(self.route)
         else:
             try:
                 os.remove(self.save_route_path)
@@ -725,57 +620,16 @@ class SpanshRouter():
             except:
                 print("No offset to delete")
 
-    def update_bodies_text(self):
-        if not self.roadtoriches: return
-
-        # For the bodies to scan use the current system, which is one before the next stop
-        lastsystemoffset = self.offset - 1
-        if lastsystemoffset < 0:
-            lastsystemoffset = 0 # Display bodies of the first system
-
-        lastsystem = self.route[lastsystemoffset][0]
-        bodynames = self.route[lastsystemoffset][2]
-        bodysubtypes = self.route[lastsystemoffset][3]
-     
-        waterbodies = []
-        rockybodies = []
-        metalbodies = []
-        earthlikebodies = []
-        unknownbodies = []
-
-        for num, name in enumerate(bodysubtypes):
-            shortbodyname = bodynames[num].replace(lastsystem + " ", "")
-            if name.lower() == "high metal content world":
-                metalbodies.append(shortbodyname)
-            elif name.lower() == "rocky body": 
-                rockybodies.append(shortbodyname)
-            elif name.lower() == "earth-like world":
-                earthlikebodies.append(shortbodyname)
-            elif name.lower() == "water world": 
-                waterbodies.append(shortbodyname)
-            else:
-                unknownbodies.append(shortbodyname)
-
-        bodysubtypeandname = ""
-        if len(metalbodies) > 0: bodysubtypeandname += f"\n   Metal: " + ', '.join(metalbodies)
-        if len(rockybodies) > 0: bodysubtypeandname += f"\n   Rocky: " + ', '.join(rockybodies)
-        if len(earthlikebodies) > 0: bodysubtypeandname += f"\n   Earth: " + ', '.join(earthlikebodies)
-        if len(waterbodies) > 0: bodysubtypeandname += f"\n   Water: " + ', '.join(waterbodies)
-        if len(unknownbodies) > 0: bodysubtypeandname += f"\n   Unknown: " + ', '.join(unknownbodies)
-
-        self.bodies = f"\n{lastsystem}:{bodysubtypeandname}"
-
-
     def check_range(self, name, index, mode):
-        value = self.range_entry.var.get()
-        if value.__len__() > 0 and value != self.range_entry.placeholder:
+        value = self.plot_range_entry.var.get()
+        if value.__len__() > 0 and value != self.plot_range_entry.placeholder:
             try:
                 float(value)
-                self.range_entry.set_error_style(False)
+                self.plot_range_entry.set_error_style(False)
                 self.hide_error()
             except ValueError:
                 self.show_error("Invalid range")
-                self.range_entry.set_error_style()
+                self.plot_range_entry.set_error_style()
 
     def cleanup_old_version(self):
         try:
